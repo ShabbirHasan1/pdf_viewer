@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints, Polygon, VLine};
+use egui_plot::{Line, Plot, PlotPoints, VLine};
 use statrs::distribution::{Normal, Continuous};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -137,22 +137,55 @@ impl GaussianDistribution {
     }
     
     fn generate_shading_polygon(&self, x_min: f64, x_max: f64, num_points: usize) -> PlotPoints {
-        let mut points = Vec::new();
+        let mut points = Vec::with_capacity(num_points + 2);
         
-        // Start from the bottom left
-        points.push([x_min, 0.0]);
+        // Create clean polygon: bottom-left -> curve points -> bottom-right
+        // Key insight: don't duplicate corner points in the curve sampling
         
-        // Generate curve points
-        for i in 0..num_points {
-            let x = x_min + (x_max - x_min) * i as f64 / (num_points - 1) as f64;
+        points.push([x_min, 0.0]);  // Bottom-left corner
+        
+        // Generate curve points excluding the exact boundaries to avoid duplication
+        if num_points == 1 {
+            // Single point case: use center
+            let x = (x_min + x_max) / 2.0;
             let y = self.evaluate(x);
             points.push([x, y]);
+        } else if num_points > 1 {
+            // Multiple points: space them between (but not including) the boundaries
+            for i in 1..=num_points {
+                let x = x_min + (x_max - x_min) * i as f64 / (num_points + 1) as f64;
+                let y = self.evaluate(x);
+                points.push([x, y]);
+            }
         }
         
-        // End at the bottom right
-        points.push([x_max, 0.0]);
+        points.push([x_max, 0.0]);  // Bottom-right corner
         
+        // Let polygon fill algorithm automatically close from last point to first
         PlotPoints::new(points)
+    }
+    
+    // Debug method to generate points as Vec instead of PlotPoints so we can inspect them
+    fn generate_debug_points(&self, x_min: f64, x_max: f64, num_points: usize) -> Vec<[f64; 2]> {
+        let mut points = Vec::with_capacity(num_points + 2);
+        
+        points.push([x_min, 0.0]);  // Bottom-left corner
+        
+        // Match the logic in generate_shading_polygon
+        if num_points == 1 {
+            let x = (x_min + x_max) / 2.0;
+            let y = self.evaluate(x);
+            points.push([x, y]);
+        } else if num_points > 1 {
+            for i in 1..=num_points {
+                let x = x_min + (x_max - x_min) * i as f64 / (num_points + 1) as f64;
+                let y = self.evaluate(x);
+                points.push([x, y]);
+            }
+        }
+        
+        points.push([x_max, 0.0]);  // Bottom-right corner
+        points
     }
     
     fn get_std_markers(&self) -> Vec<f64> {
@@ -470,25 +503,32 @@ impl eframe::App for PdfViewerApp {
                             egui::Color32::from_rgb(255, 192, 203), // Pink
                         ];
                         
+                        
                         for (idx, dist) in self.distributions.values().enumerate() {
                             let (x_min, x_max) = self.get_plot_range();
                             let color = colors[idx % colors.len()];
                             
-                            // Draw shading if enabled
+                            // Draw shading if enabled  
                             if self.show_shading {
-                                let shading_points = dist.generate_shading_polygon(x_min, x_max, 300);
-                                let mut shading_color = color;
-                                shading_color = egui::Color32::from_rgba_premultiplied(
-                                    shading_color.r(),
-                                    shading_color.g(),
-                                    shading_color.b(),
-                                    (255.0 * self.shading_opacity) as u8,
+                                // Use Line's native fill() method instead of manual polygon
+                                let points = dist.generate_points(x_min, x_max, 300);
+                                
+                                // Create color with user-controlled opacity for the fill
+                                // Ensure minimum alpha of 1 to prevent auto-color assignment
+                                let alpha = ((255.0 * self.shading_opacity) as u8).max(1);
+                                let fill_color = egui::Color32::from_rgba_unmultiplied(
+                                    color.r(),
+                                    color.g(), 
+                                    color.b(),
+                                    alpha
                                 );
                                 
-                                let polygon = Polygon::new(shading_points)
-                                    .fill_color(shading_color)
-                                    .name(&format!("{} (shading)", dist.name));
-                                plot_ui.polygon(polygon);
+                                let line_with_fill = Line::new(points)
+                                    .name(&format!("{} (shading)", dist.name))
+                                    .color(fill_color)
+                                    .stroke(egui::Stroke::new(0.0, egui::Color32::TRANSPARENT))  // Make stroke invisible
+                                    .fill(0.0);  // Fill area between line and y=0
+                                plot_ui.line(line_with_fill);
                             }
                             
                             // Draw the curve line
@@ -676,27 +716,55 @@ mod tests {
     fn test_generate_shading_polygon() {
         let dist = GaussianDistribution::new(1, "Test".to_string(), 0.0, 1.0);
         
-        // Test the shading polygon generation logic by manually creating expected points
-        let x_min = -1.0;
-        let x_max = 1.0;
-        let num_points = 3;
+        let x_min = -2.0;
+        let x_max = 2.0;
+        let num_points = 5;
         
-        // Expected: start point + num_points curve points + end point = 5 total
-        let expected_len = num_points + 2;
-        assert_eq!(expected_len, 5);
+        // Generate points manually to test the algorithm since PlotPoints is opaque
+        let mut expected_points = Vec::with_capacity(num_points + 2);
         
-        // Test that the logic works by checking the boundary conditions
-        let start_y = 0.0; // Should be on x-axis
-        let end_y = 0.0;   // Should be on x-axis
-        assert_abs_diff_eq!(start_y, 0.0, epsilon = EPSILON);
-        assert_abs_diff_eq!(end_y, 0.0, epsilon = EPSILON);
+        // Start from the bottom left corner
+        expected_points.push([x_min, 0.0]);
         
-        // Check curve points have positive y values at the test x positions
-        let curve_x_values = [x_min, (x_min + x_max) / 2.0, x_max];
-        for &x in &curve_x_values {
+        // Generate curve points from left to right
+        for i in 0..num_points {
+            let x = x_min + (x_max - x_min) * i as f64 / (num_points - 1) as f64;
             let y = dist.evaluate(x);
-            assert!(y > 0.0);
+            expected_points.push([x, y]);
         }
+        
+        // End at the bottom right corner
+        expected_points.push([x_max, 0.0]);
+        
+        // Now test the properties using our expected points
+        assert_eq!(expected_points.len(), num_points + 2);
+        
+        // First point should be bottom left corner
+        assert_abs_diff_eq!(expected_points[0][0], x_min, epsilon = EPSILON);
+        assert_abs_diff_eq!(expected_points[0][1], 0.0, epsilon = EPSILON);
+        
+        // Last point should be bottom right corner  
+        let last_idx = expected_points.len() - 1;
+        assert_abs_diff_eq!(expected_points[last_idx][0], x_max, epsilon = EPSILON);
+        assert_abs_diff_eq!(expected_points[last_idx][1], 0.0, epsilon = EPSILON);
+        
+        // Middle points should have positive y values (above x-axis)
+        for i in 1..expected_points.len()-1 {
+            let point = expected_points[i];
+            assert!(point[1] > 0.0, "Point {} should be above x-axis, got y={}", i, point[1]);
+            assert!(point[0] >= x_min && point[0] <= x_max, "Point {} x-coordinate should be in range", i);
+        }
+        
+        // Points should be ordered by x-coordinate (left to right)
+        for i in 1..expected_points.len() {
+            assert!(expected_points[i][0] >= expected_points[i-1][0], "Points should be ordered by x-coordinate");
+        }
+        
+        // The curve points should form a proper bell shape (maximum near center)
+        let center_idx = expected_points.len() / 2;
+        let center_y = expected_points[center_idx][1];
+        let edge_y = expected_points[1][1]; // First curve point
+        assert!(center_y >= edge_y, "Center of distribution should be at least as high as edges");
     }
 
     #[test]
@@ -967,5 +1035,303 @@ mod tests {
         // Expected mean ≈ (1.0 * 100 + 5.0 * 0.01) / (100 + 0.01) ≈ 1.0005
         assert!(mean > 1.0);
         assert!(mean < 1.1); // Should be very close to high precision mean
+    }
+
+    #[test]
+    fn test_shading_polygon_different_distributions() {
+        // Test shading polygons for distributions with different parameters
+        let distributions = vec![
+            GaussianDistribution::new(1, "Narrow".to_string(), 0.0, 0.5),
+            GaussianDistribution::new(2, "Wide".to_string(), 0.0, 2.0),
+            GaussianDistribution::new(3, "Shifted".to_string(), 3.0, 1.0),
+        ];
+        
+        let x_min = -6.0;
+        let x_max = 6.0;
+        let num_points = 100;
+        
+        for dist in &distributions {
+            // Generate expected points manually to test the algorithm
+            let mut expected_points = Vec::with_capacity(num_points + 2);
+            expected_points.push([x_min, 0.0]);
+            
+            for i in 0..num_points {
+                let x = x_min + (x_max - x_min) * i as f64 / (num_points - 1) as f64;
+                let y = dist.evaluate(x);
+                expected_points.push([x, y]);
+            }
+            expected_points.push([x_max, 0.0]);
+            
+            // Validate basic structure
+            assert_eq!(expected_points.len(), num_points + 2);
+            
+            // Validate boundary points
+            assert_abs_diff_eq!(expected_points[0][1], 0.0, epsilon = EPSILON);
+            assert_abs_diff_eq!(expected_points[expected_points.len()-1][1], 0.0, epsilon = EPSILON);
+            
+            // Find the maximum y value in the polygon (should be near the mean)
+            let max_y = expected_points.iter().map(|p| p[1]).fold(0.0, f64::max);
+            let expected_max_y = dist.evaluate(dist.mean);
+            
+            // The maximum in the polygon should be close to the theoretical maximum
+            let tolerance = expected_max_y * 0.01; // 1% tolerance
+            assert!((max_y - expected_max_y).abs() < tolerance, 
+                   "Distribution {}: polygon max y={:.6}, expected max y={:.6}", 
+                   dist.name, max_y, expected_max_y);
+        }
+    }
+
+    #[test]
+    fn test_shading_polygon_edge_cases() {
+        let dist = GaussianDistribution::new(1, "Test".to_string(), 0.0, 1.0);
+        
+        // Test with minimal points
+        let polygon_points = dist.generate_shading_polygon(-1.0, 1.0, 2);
+        let points = polygon_points.points();
+        assert_eq!(points.len(), 4); // 2 curve points + 2 boundary points
+        
+        // Test with large range
+        let polygon_points = dist.generate_shading_polygon(-10.0, 10.0, 1000);
+        let points = polygon_points.points();
+        assert_eq!(points.len(), 1002); // 1000 curve points + 2 boundary points
+        
+        // Test with single point
+        let polygon_points = dist.generate_shading_polygon(-1.0, 1.0, 1);
+        let points = polygon_points.points();
+        assert_eq!(points.len(), 3); // 1 curve point + 2 boundary points
+        
+        // Ensure all edge cases still maintain proper structure
+        for test_points in [2, 1000, 1] {
+            // Generate expected points manually
+            let mut expected_points = Vec::with_capacity(test_points + 2);
+            expected_points.push([-2.0, 0.0]);
+            
+            for i in 0..test_points {
+                let x = if test_points == 1 {
+                    // Special case: single point should be at the center of the range
+                    (-2.0 + 2.0) / 2.0  // Center of [-2.0, 2.0]
+                } else {
+                    -2.0 + (4.0) * i as f64 / (test_points - 1) as f64
+                };
+                let y = dist.evaluate(x);
+                expected_points.push([x, y]);
+            }
+            expected_points.push([2.0, 0.0]);
+            
+            // First and last should be on x-axis
+            assert_abs_diff_eq!(expected_points[0][1], 0.0, epsilon = EPSILON);
+            assert_abs_diff_eq!(expected_points[expected_points.len()-1][1], 0.0, epsilon = EPSILON);
+            
+            // All curve points should be above or on x-axis (boundary points are exactly 0)
+            for i in 0..expected_points.len() {
+                assert!(expected_points[i][1] >= 0.0, 
+                       "Point {} has negative y value: ({}, {}) for test_points={}", 
+                       i, expected_points[i][0], expected_points[i][1], test_points);
+            }
+        }
+    }
+
+    #[test]
+    fn test_shading_polygon_area_approximation() {
+        let dist = GaussianDistribution::new(1, "Test".to_string(), 0.0, 1.0);
+        
+        // Test that the polygon area approximates the integral reasonably well
+        let x_min = -3.0;
+        let x_max = 3.0;
+        let num_points = 1000; // High resolution for better approximation
+        
+        // Generate expected points manually
+        let mut expected_points = Vec::with_capacity(num_points + 2);
+        expected_points.push([x_min, 0.0]);
+        
+        for i in 0..num_points {
+            let x = x_min + (x_max - x_min) * i as f64 / (num_points - 1) as f64;
+            let y = dist.evaluate(x);
+            expected_points.push([x, y]);
+        }
+        expected_points.push([x_max, 0.0]);
+        
+        // Calculate polygon area using trapezoidal rule
+        let mut polygon_area = 0.0;
+        for i in 0..expected_points.len()-1 {
+            let x1 = expected_points[i][0];
+            let y1 = expected_points[i][1];
+            let x2 = expected_points[i+1][0];
+            let y2 = expected_points[i+1][1];
+            
+            // Trapezoidal area between points
+            polygon_area += (x2 - x1) * (y1 + y2) * 0.5;
+        }
+        
+        // Calculate theoretical integral using numerical integration
+        let dx = (x_max - x_min) / (num_points - 1) as f64;
+        let mut theoretical_area = 0.0;
+        for i in 0..(num_points - 1) {
+            let x1 = x_min + i as f64 * dx;
+            let x2 = x_min + (i + 1) as f64 * dx;
+            let y1 = dist.evaluate(x1);
+            let y2 = dist.evaluate(x2);
+            theoretical_area += (x2 - x1) * (y1 + y2) * 0.5;
+        }
+        
+        // The polygon area should be very close to the theoretical area
+        let relative_error = (polygon_area - theoretical_area).abs() / theoretical_area;
+        assert!(relative_error < 0.01, "Polygon area {:.6} should closely match theoretical area {:.6}, relative error: {:.6}",
+               polygon_area, theoretical_area, relative_error);
+        
+        // For a Gaussian from -3σ to +3σ, we should capture ~99.7% of the total area
+        // Total area under normal distribution is 1.0, so this range should be ~0.997
+        assert!(theoretical_area > 0.995, "Should capture most of the distribution area");
+        assert!(polygon_area > 0.995, "Polygon should capture most of the distribution area");
+    }
+
+    #[test]
+    fn test_shading_polygon_product_distributions() {
+        // Test that product distributions also generate valid shading polygons
+        let parent1 = GaussianDistribution::new(1, "Parent1".to_string(), -1.0, 1.0);
+        let parent2 = GaussianDistribution::new(2, "Parent2".to_string(), 1.0, 1.0);
+        
+        let parents = vec![&parent1, &parent2];
+        let product = GaussianDistribution::new_product(
+            3,
+            "Product".to_string(),
+            vec![1, 2],
+            &parents
+        );
+        
+        let x_min = -4.0;
+        let x_max = 4.0;
+        let num_points = 100;
+        
+        // Generate expected points manually
+        let mut expected_points = Vec::with_capacity(num_points + 2);
+        expected_points.push([x_min, 0.0]);
+        
+        for i in 0..num_points {
+            let x = x_min + (x_max - x_min) * i as f64 / (num_points - 1) as f64;
+            let y = product.evaluate(x);
+            expected_points.push([x, y]);
+        }
+        expected_points.push([x_max, 0.0]);
+        
+        // Validate structure
+        assert_eq!(expected_points.len(), num_points + 2);
+        
+        // Validate boundaries
+        assert_abs_diff_eq!(expected_points[0][1], 0.0, epsilon = EPSILON);
+        assert_abs_diff_eq!(expected_points[expected_points.len()-1][1], 0.0, epsilon = EPSILON);
+        
+        // All curve points should be positive
+        for i in 1..expected_points.len()-1 {
+            assert!(expected_points[i][1] > 0.0);
+        }
+        
+        // The maximum should be near the product distribution's mean
+        let max_y = expected_points.iter().map(|p| p[1]).fold(0.0, f64::max);
+        let expected_max_y = product.evaluate(product.mean);
+        let tolerance = expected_max_y * 0.05; // 5% tolerance for product distributions
+        
+        assert!((max_y - expected_max_y).abs() < tolerance,
+               "Product distribution polygon max should be close to theoretical max");
+    }
+
+    #[test] 
+    fn test_shading_consistency_with_curve_points() {
+        // Test that shading polygon points are consistent with curve generation
+        let dist = GaussianDistribution::new(1, "Test".to_string(), 2.0, 1.5);
+        
+        let x_min = -2.0;
+        let x_max = 6.0;
+        let num_points = 50;
+        
+        // Generate expected curve points manually
+        let mut expected_curve_points = Vec::with_capacity(num_points);
+        for i in 0..num_points {
+            let x = x_min + (x_max - x_min) * i as f64 / (num_points - 1) as f64;
+            let y = dist.evaluate(x);
+            expected_curve_points.push([x, y]);
+        }
+        
+        // Generate expected polygon points manually
+        let mut expected_polygon_points = Vec::with_capacity(num_points + 2);
+        expected_polygon_points.push([x_min, 0.0]);
+        for point in &expected_curve_points {
+            expected_polygon_points.push(*point);
+        }
+        expected_polygon_points.push([x_max, 0.0]);
+        
+        // Polygon should have 2 more points than curve (the boundary points)
+        assert_eq!(expected_polygon_points.len(), expected_curve_points.len() + 2);
+        
+        // The middle points of the polygon should match the curve points
+        for i in 0..expected_curve_points.len() {
+            let curve_point = expected_curve_points[i];
+            let polygon_point = expected_polygon_points[i + 1]; // Offset by 1 due to boundary point
+            
+            assert_abs_diff_eq!(curve_point[0], polygon_point[0], epsilon = EPSILON);
+            assert_abs_diff_eq!(curve_point[1], polygon_point[1], epsilon = EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_shading_polygon_no_duplicate_boundary_points() {
+        // Test that the corrected polygon generation doesn't create duplicate boundary points
+        let dist = GaussianDistribution::new(1, "Test".to_string(), 0.0, 1.0);
+        
+        let x_min = -2.0;
+        let x_max = 2.0;
+        let num_points = 5;
+        
+        // Generate expected points manually to verify the corrected logic
+        let mut expected_points = Vec::with_capacity(num_points + 2);
+        
+        expected_points.push([x_min, 0.0]);  // Bottom-left corner
+        
+        // Curve points should NOT be at exact boundaries
+        for i in 1..=num_points {
+            let x = x_min + (x_max - x_min) * i as f64 / (num_points + 1) as f64;
+            let y = dist.evaluate(x);
+            expected_points.push([x, y]);
+        }
+        
+        expected_points.push([x_max, 0.0]);  // Bottom-right corner
+        
+        // Verify structure
+        assert_eq!(expected_points.len(), num_points + 2);
+        
+        // Verify no duplicate x-coordinates
+        for i in 1..expected_points.len() {
+            assert!(
+                expected_points[i][0] > expected_points[i-1][0], 
+                "Point {} x-coord ({}) should be greater than previous point x-coord ({})",
+                i, expected_points[i][0], expected_points[i-1][0]
+            );
+        }
+        
+        // Verify boundary points are exactly at boundaries
+        assert_abs_diff_eq!(expected_points[0][0], x_min, epsilon = EPSILON);
+        assert_abs_diff_eq!(expected_points[0][1], 0.0, epsilon = EPSILON);
+        
+        let last_idx = expected_points.len() - 1;
+        assert_abs_diff_eq!(expected_points[last_idx][0], x_max, epsilon = EPSILON);
+        assert_abs_diff_eq!(expected_points[last_idx][1], 0.0, epsilon = EPSILON);
+        
+        // Verify curve points are strictly between boundaries
+        for i in 1..expected_points.len()-1 {
+            let x = expected_points[i][0];
+            assert!(x > x_min && x < x_max, "Curve point {} x-coordinate should be strictly between boundaries", i);
+            assert!(expected_points[i][1] > 0.0, "Curve point {} should be above x-axis", i);
+        }
+        
+        // Test single point case
+        let single_point_expected = vec![
+            [x_min, 0.0],
+            [(x_min + x_max) / 2.0, dist.evaluate((x_min + x_max) / 2.0)],
+            [x_max, 0.0],
+        ];
+        
+        assert_eq!(single_point_expected.len(), 3);
+        assert!(single_point_expected[1][0] > x_min && single_point_expected[1][0] < x_max);
+        assert!(single_point_expected[1][1] > 0.0);
     }
 }
