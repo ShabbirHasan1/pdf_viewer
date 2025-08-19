@@ -1,0 +1,1119 @@
+#+TITLE: PDF Viewer - Complete Code Documentation
+#+AUTHOR: Senior Rust Developer with egui Framework Expertise
+#+DATE: [2025-08-18 Sun]
+
+/A comprehensive line-by-line explanation of the Rust/egui PDF viewer application/
+
+*Target Audience*: Developers with no prior Rust knowledge  
+*Author Perspective*: Senior Rust developer with egui framework expertise
+
+* Table of Contents                                                     :TOC:
+- [[#project-overview][Project Overview]]
+- [[#dependencies-and-imports][Dependencies and Imports]]
+- [[#application-entry-point][Application Entry Point]]
+- [[#core-data-structures][Core Data Structures]]
+- [[#mathematical-implementation][Mathematical Implementation]]
+- [[#user-interface-logic][User Interface Logic]]
+- [[#test-suite][Test Suite]]
+
+* Project Overview
+
+This application is a *probability density function (PDF) explorer* built in Rust using the egui framework. It allows mathematicians to visualize and manipulate Gaussian distributions, multiply them together, and see real-time updates as parameters change.
+
+** Key Concepts for Non-Rust Developers:
+
+- *~struct~*: Like a class in other languages, defines data structures
+- *~impl~*: Implementation block, like methods in a class
+- *~fn~*: Function declaration
+- *~&~*: Reference (borrowing data without taking ownership)
+- *~mut~*: Mutable (can be changed)
+- *~Vec~*: Dynamic array/list
+- *~HashMap~*: Dictionary/map data structure
+- *~Option~*: Can contain a value or be empty (like nullable in other languages)
+- *~Result~*: Success/Error return type
+
+* Dependencies and Imports
+
+#+BEGIN_SRC rust
+use eframe::egui;
+use egui_plot::{Line, Plot, PlotPoints, VLine};
+use statrs::distribution::{Normal, Continuous};
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+#+END_SRC
+
+*Line 1*: ~use eframe::egui;~
+- *eframe*: The framework that handles window creation and event loops
+- *egui*: The immediate mode GUI library for creating user interfaces
+- This gives us access to UI widgets like buttons, sliders, text inputs
+
+*Line 2*: ~use egui_plot::{Line, Plot, PlotPoints, VLine};~
+- *egui_plot*: Plotting library built on top of egui
+- *Line*: Represents a curve/line in a plot
+- *Plot*: The main plotting widget that displays graphs
+- *PlotPoints*: Container for (x,y) coordinate data
+- *VLine*: Vertical lines for marking specific x-values
+
+*Line 3*: ~use statrs::distribution::{Normal, Continuous};~
+- *statrs*: Statistical functions library
+- *Normal*: Implementation of the normal (Gaussian) distribution
+- *Continuous*: Trait (interface) for continuous probability distributions
+- This provides the mathematical functions for PDF calculations
+
+*Line 4*: ~use std::collections::HashMap;~
+- *HashMap*: Built-in dictionary/map data structure
+- Used to store distributions with unique IDs as keys
+- Similar to ~dict~ in Python or ~Map~ in JavaScript
+
+*Line 5*: ~use serde::{Deserialize, Serialize};~
+- *serde*: Serialization library for converting data to/from JSON
+- *Serialize*: Trait for converting Rust data to JSON
+- *Deserialize*: Trait for converting JSON to Rust data
+- Enables saving/loading sessions
+
+* Application Entry Point
+
+#+BEGIN_SRC rust
+fn main() -> Result<(), eframe::Error> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 800.0]),
+        ..Default::default()
+    };
+    
+    eframe::run_native(
+        "PDF Viewer",
+        options,
+        Box::new(|_cc| Ok(Box::new(PdfViewerApp::new()))),
+    )
+}
+#+END_SRC
+
+*Line 7*: ~fn main() -> Result<(), eframe::Error> {~
+- Entry point of the program (like ~main()~ in C++ or ~public static void main~ in Java)
+- Returns a ~Result~ type that can be either success ~()~ or an ~eframe::Error~
+- The ~()~ represents "unit type" (like ~void~ in C++)
+
+*Lines 8-11*: Configuration object creation
+- ~let options = eframe::NativeOptions {~: Creates a configuration struct
+- ~viewport:~: Sets window properties
+- ~with_inner_size([1200.0, 800.0])~: Sets initial window size to 1200x800 pixels
+- ~..Default::default()~: Uses default values for all other fields (like ~...~ spread operator)
+
+*Lines 13-17*: Application launch
+- ~eframe::run_native(~: Starts the application event loop
+- ~"PDF Viewer"~: Window title
+- ~options~: Configuration we created above
+- ~Box::new(|_cc| Ok(Box::new(PdfViewerApp::new())))~: 
+  - Creates a closure (anonymous function) that initializes our app
+  - ~Box~: Heap allocation (like ~new~ in C++)
+  - ~_cc~: Creation context (unused, hence the ~_~ prefix)
+  - ~PdfViewerApp::new()~: Creates our main application instance
+
+* Core Data Structures
+
+** Main Application State
+
+#+BEGIN_SRC rust
+#[derive(Default)]
+struct PdfViewerApp {
+    distributions: HashMap<u32, GaussianDistribution>,
+    next_id: u32,
+    selected_for_multiplication: Vec<u32>,
+    plot_bounds: Option<egui_plot::PlotBounds>,
+    show_shading: bool,
+    shading_opacity: f32,
+    show_std_markers: bool,
+}
+#+END_SRC
+
+*Line 20*: ~#[derive(Default)]~
+- *Attribute/Annotation*: Tells Rust to automatically implement the ~Default~ trait
+- ~Default~ provides a ~default()~ method that creates the struct with default values
+- Similar to a parameterless constructor
+
+*Line 21*: ~struct PdfViewerApp {~
+- Main application state container
+- Holds all data needed for the entire application lifetime
+
+*Line 22*: ~distributions: HashMap<u32, GaussianDistribution>,~
+- *Type*: Dictionary mapping unsigned 32-bit integers to distribution objects
+- *Purpose*: Stores all probability distributions by unique ID
+- *Key*: ~u32~ - unique identifier for each distribution
+- *Value*: ~GaussianDistribution~ - the actual distribution data
+
+*Line 23*: ~next_id: u32,~
+- *Type*: Unsigned 32-bit integer
+- *Purpose*: Counter to ensure each new distribution gets a unique ID
+- Incremented each time a new distribution is created
+
+*Line 24*: ~selected_for_multiplication: Vec<u32>,~
+- *Type*: Dynamic array of unsigned 32-bit integers
+- *Purpose*: Tracks which distributions the user has selected for multiplication
+- Contains the IDs of selected distributions
+
+*Line 25*: ~plot_bounds: Option<egui_plot::PlotBounds>,~
+- *Type*: Optional plot boundary object
+- *Purpose*: Stores current zoom/pan state of the plot
+- ~Option~ means it can be ~Some(bounds)~ or ~None~ (no custom bounds set)
+
+*Line 26*: ~show_shading: bool,~
+- *Type*: Boolean (true/false)
+- *Purpose*: Controls whether to draw filled areas under curves
+
+*Line 27*: ~shading_opacity: f32,~
+- *Type*: 32-bit floating point number
+- *Purpose*: Controls transparency of the shading (0.0 = invisible, 1.0 = opaque)
+
+*Line 28*: ~show_std_markers: bool,~
+- *Type*: Boolean
+- *Purpose*: Controls whether to draw vertical lines at standard deviation intervals
+
+** Session Data Structure
+
+#+BEGIN_SRC rust
+#[derive(Serialize, Deserialize)]
+struct SessionData {
+    distributions: HashMap<u32, GaussianDistribution>,
+    next_id: u32,
+    show_shading: bool,
+    shading_opacity: f32,
+    show_std_markers: bool,
+}
+#+END_SRC
+
+*Line 31*: ~#[derive(Serialize, Deserialize)]~
+- *Attributes*: Auto-generate JSON conversion code
+- *Serialize*: Can convert this struct to JSON string
+- *Deserialize*: Can create this struct from JSON string
+
+*Lines 32-38*: Session data structure
+- *Purpose*: Subset of app state that can be saved/loaded
+- Contains all user data but excludes temporary UI state
+- Notice it doesn't include ~selected_for_multiplication~ or ~plot_bounds~ 
+- These are considered temporary UI state, not part of saved sessions
+
+** App Initialization
+
+#+BEGIN_SRC rust
+impl PdfViewerApp {
+    fn new() -> Self {
+        Self {
+            show_shading: true,
+            shading_opacity: 0.3,
+            show_std_markers: true,
+            ..Default::default()
+        }
+    }
+}
+#+END_SRC
+
+*Line 40*: ~impl PdfViewerApp {~
+- *Implementation block*: Where we define methods for the ~PdfViewerApp~ struct
+- Like defining methods inside a class
+
+*Line 41*: ~fn new() -> Self {~
+- *Constructor function*: Creates a new instance of ~PdfViewerApp~
+- ~Self~ refers to ~PdfViewerApp~ (the type we're implementing for)
+- By convention, Rust uses ~new()~ for constructors
+
+*Lines 42-47*: Initialization with custom defaults
+- Sets specific default values for visual settings
+- ~show_shading: true~: Enable shading by default
+- ~shading_opacity: 0.3~: 30% opacity for fills
+- ~show_std_markers: true~: Show standard deviation markers
+- ~..Default::default()~: Use default values for all other fields
+
+** Gaussian Distribution Structure
+
+#+BEGIN_SRC rust
+#[derive(Clone, Serialize, Deserialize)]
+struct GaussianDistribution {
+    id: u32,
+    name: String,
+    mean: f64,
+    std_dev: f64,
+    parent_ids: Vec<u32>,
+    is_product: bool,
+}
+#+END_SRC
+
+*Line 51*: ~#[derive(Clone, Serialize, Deserialize)]~
+- *Clone*: Can create copies of this struct
+- *Serialize/Deserialize*: Can convert to/from JSON for saving
+
+*Line 52*: ~struct GaussianDistribution {~
+- Represents a single Gaussian (normal) distribution
+- Contains both mathematical parameters and metadata
+
+*Line 53*: ~id: u32,~
+- *Unique identifier*: Each distribution has a distinct ID
+- Used as key in the HashMap for fast lookup
+
+*Line 54*: ~name: String,~
+- *Display name*: Human-readable label (e.g., "Gaussian 1", "Product 3")
+- ~String~ is owned, growable text (like ~std::string~ in C++)
+
+*Line 55*: ~mean: f64,~
+- *Mathematical parameter*: Center of the bell curve
+- ~f64~ is 64-bit floating point (double precision)
+
+*Line 56*: ~std_dev: f64,~
+- *Mathematical parameter*: Width/spread of the bell curve
+- Standard deviation - smaller values = narrower curves
+
+*Line 57*: ~parent_ids: Vec<u32>,~
+- *Dependency tracking*: IDs of distributions used to create this one
+- Empty for basic distributions, populated for product distributions
+
+*Line 58*: ~is_product: bool,~
+- *Type flag*: ~true~ if this distribution is the product of others
+- ~false~ for manually created distributions
+- Affects UI (product distributions show different controls)
+
+** Default Implementation for GaussianDistribution
+
+#+BEGIN_SRC rust
+impl Default for GaussianDistribution {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            name: "Gaussian 1".to_string(),
+            mean: 0.0,
+            std_dev: 1.0,
+            parent_ids: vec![],
+            is_product: false,
+        }
+    }
+}
+#+END_SRC
+
+*Line 61*: ~impl Default for GaussianDistribution {~
+- Implements the ~Default~ trait manually (custom default values)
+- Required because we have specific default values different from Rust's built-in defaults
+
+*Lines 63-70*: Default values
+- ~id: 0~: Default ID (will be overridden in practice)
+- ~name: "Gaussian 1".to_string()~: Creates owned string
+- ~mean: 0.0~: Standard normal distribution center
+- ~std_dev: 1.0~: Unit standard deviation
+- ~parent_ids: vec![]~: Empty vector (no parents)
+- ~is_product: false~: Not a product distribution
+
+* Mathematical Implementation
+
+** Basic Distribution Constructor
+
+#+BEGIN_SRC rust
+impl GaussianDistribution {
+    fn new(id: u32, name: String, mean: f64, std_dev: f64) -> Self {
+        Self {
+            id,
+            name,
+            mean,
+            std_dev,
+            parent_ids: vec![],
+            is_product: false,
+        }
+    }
+#+END_SRC
+
+*Line 74*: ~impl GaussianDistribution {~
+- Implementation block for distribution methods
+
+*Line 75*: ~fn new(id: u32, name: String, mean: f64, std_dev: f64) -> Self {~
+- *Constructor*: Creates a basic (non-product) distribution
+- Takes ID, name, mathematical parameters
+- Returns a new ~GaussianDistribution~ instance
+
+*Lines 76-83*: Field initialization
+- Uses Rust's field shorthand syntax (when variable name = field name)
+- ~id,~ is equivalent to ~id: id,~
+- Sets ~parent_ids~ to empty and ~is_product~ to false
+
+** Product Distribution Constructor
+
+#+BEGIN_SRC rust
+fn new_product(id: u32, name: String, parent_ids: Vec<u32>, parents: &[&GaussianDistribution]) -> Self {
+    // For Gaussian distributions, multiplication results in another Gaussian
+    // with specific mean and variance relationships
+    let (mean, variance) = Self::multiply_gaussians(parents);
+    Self {
+        id,
+        name,
+        mean,
+        std_dev: variance.sqrt(),
+        parent_ids,
+        is_product: true,
+    }
+}
+#+END_SRC
+
+*Line 86*: Function signature
+- Creates a distribution that's the product of multiple parent distributions
+- ~parents: &[&GaussianDistribution]~ - slice of references to parent distributions
+- ~&[&T]~ is a "slice of references" - like an array view in other languages
+
+*Lines 87-88*: Mathematical explanation comments
+- When you multiply Gaussian PDFs, the result is another Gaussian
+- But with different mean and variance calculated from the parents
+
+*Line 89*: ~let (mean, variance) = Self::multiply_gaussians(parents);~
+- *Tuple destructuring*: Gets two values from the function call
+- ~Self::multiply_gaussians~ calls the static method on this type
+- Returns the calculated mean and variance for the product
+
+*Line 94*: ~std_dev: variance.sqrt(),~
+- *Square root*: Standard deviation is the square root of variance
+- Mathematical relationship: σ = √(σ²)
+
+** Gaussian Multiplication Mathematics
+
+#+BEGIN_SRC rust
+fn multiply_gaussians(gaussians: &[&GaussianDistribution]) -> (f64, f64) {
+    if gaussians.is_empty() {
+        return (0.0, 1.0);
+    }
+    
+    // For multiplying Gaussian PDFs: 
+    // The product of two Gaussians N(μ₁,σ₁²) * N(μ₂,σ₂²) is proportional to
+    // N((μ₁/σ₁² + μ₂/σ₂²)/(1/σ₁² + 1/σ₂²), 1/(1/σ₁² + 1/σ₂²))
+    
+    let mut precision_sum = 0.0;  // sum of 1/σ²
+    let mut weighted_mean_sum = 0.0;  // sum of μ/σ²
+#+END_SRC
+
+*Line 100*: Function signature
+- *Static method*: Doesn't need an instance, called on the type itself
+- Takes slice of references to distributions
+- Returns tuple of (mean, variance)
+
+*Lines 101-103*: Edge case handling
+- *Early return*: If no gaussians provided, return default values
+- Prevents division by zero errors later
+
+*Lines 105-107*: Mathematical explanation
+- *Mathematical comment*: Explains the theory behind Gaussian multiplication
+- Uses Unicode mathematical symbols for clarity (μ = mean, σ = standard deviation)
+
+*Lines 109-110*: Variable initialization
+- *precision*: Mathematical term = 1/variance = 1/σ²
+- *weighted_mean*: mean weighted by precision = μ/σ²
+- These are the building blocks for the final calculation
+
+#+BEGIN_SRC rust
+    for gaussian in gaussians {
+        let precision = 1.0 / (gaussian.std_dev * gaussian.std_dev);
+        precision_sum += precision;
+        weighted_mean_sum += gaussian.mean * precision;
+    }
+    
+    let result_mean = weighted_mean_sum / precision_sum;
+    let result_variance = 1.0 / precision_sum;
+    
+    (result_mean, result_variance)
+#+END_SRC
+
+*Lines 112-116*: Accumulation loop
+- *For each parent distribution*: Calculate its contribution
+- ~precision = 1.0 / (σ²)~: Higher precision = narrower distribution = more influence
+- Accumulate both precision values and weighted means
+
+*Lines 118-119*: Final calculation
+- *Result mean*: Weighted average of parent means (weights = precisions)
+- *Result variance*: Inverse of total precision
+- This is the mathematical formula for multiplying Gaussian PDFs
+
+*Line 121*: Return tuple
+- Returns both calculated values as a tuple
+- Will be destructured by the calling code
+
+** PDF Evaluation
+
+#+BEGIN_SRC rust
+fn evaluate(&self, x: f64) -> f64 {
+    let normal = Normal::new(self.mean, self.std_dev).unwrap();
+    normal.pdf(x)
+}
+#+END_SRC
+
+*Line 124*: ~fn evaluate(&self, x: f64) -> f64 {~
+- *Instance method*: Takes ~&self~ (reference to the current distribution)
+- *Purpose*: Calculate the probability density at point x
+- Core function for plotting and calculations
+
+*Line 125*: ~let normal = Normal::new(self.mean, self.std_dev).unwrap();~
+- *Creates normal distribution*: Using the ~statrs~ library
+- ~Normal::new()~ returns ~Result<Normal, Error>~
+- ~.unwrap()~ extracts the value (panics if error - acceptable here since parameters should be valid)
+
+*Line 126*: ~normal.pdf(x)~
+- *PDF calculation*: Probability Density Function at point x
+- Uses the mathematical formula: f(x) = (1/(σ√(2π))) * e^(-½((x-μ)/σ)²)
+- Returns the height of the bell curve at position x
+
+** Point Generation for Plotting
+
+#+BEGIN_SRC rust
+fn generate_points(&self, x_min: f64, x_max: f64, num_points: usize) -> PlotPoints {
+    let mut points = Vec::new();
+    for i in 0..num_points {
+        let x = x_min + (x_max - x_min) * i as f64 / (num_points - 1) as f64;
+        let y = self.evaluate(x);
+        points.push([x, y]);
+    }
+    PlotPoints::new(points)
+}
+#+END_SRC
+
+*Line 129*: Function signature
+- *Purpose*: Generate points for drawing smooth curves
+- Takes x-range and desired number of points
+- Returns ~PlotPoints~ (egui's plotting data structure)
+
+*Line 130*: ~let mut points = Vec::new();~
+- *Mutable vector*: Can grow and change
+- Will hold array of [x, y] coordinate pairs
+
+*Lines 131-135*: Point generation loop
+- *Linear interpolation*: Evenly space points across x-range
+- ~i as f64~: Type conversion from integer to float
+- *Formula*: ~x = x_min + (range * progress)~
+- ~progress = i / (num_points - 1)~ ranges from 0.0 to 1.0
+
+*Line 133*: ~let y = self.evaluate(x);~
+- *Calculate PDF value*: Get bell curve height at each x position
+- Uses the ~evaluate~ method we defined above
+
+*Line 134*: ~points.push([x, y]);~
+- *Add coordinate pair*: Array literal ~[x, y]~
+- Building up the list of points for plotting
+
+*Line 136*: ~PlotPoints::new(points)~
+- *Convert to plot format*: Wrap our points in egui's plotting structure
+- This object can be passed to egui's plotting functions
+
+** Shading Polygon Generation
+
+#+BEGIN_SRC rust
+fn generate_shading_polygon(&self, x_min: f64, x_max: f64, num_points: usize) -> PlotPoints {
+    let mut points = Vec::with_capacity(num_points + 2);
+    
+    // Create clean polygon: bottom-left -> curve points -> bottom-right
+    // Key insight: don't duplicate corner points in the curve sampling
+    
+    points.push([x_min, 0.0]);  // Bottom-left corner
+#+END_SRC
+
+*Line 139*: Function signature
+- *Purpose*: Generate points for filled area under curve
+- Similar to ~generate_points~ but creates a closed polygon
+
+*Line 140*: ~let mut points = Vec::with_capacity(num_points + 2);~
+- *Pre-allocated vector*: Reserves memory for efficiency
+- ~+ 2~ accounts for the two boundary points at y=0
+
+*Lines 142-143*: Algorithm explanation
+- *Strategy*: Create polygon that can be filled
+- Must form closed shape: bottom-left → curve → bottom-right → (automatically closes)
+
+*Line 145*: ~points.push([x_min, 0.0]);~
+- *Bottom-left corner*: Start polygon at x-axis
+- This creates the "floor" of the filled area
+
+#+BEGIN_SRC rust
+    // Generate curve points excluding the exact boundaries to avoid duplication
+    if num_points == 1 {
+        // Single point case: use center
+        let x = (x_min + x_max) / 2.0;
+        let y = self.evaluate(x);
+        points.push([x, y]);
+    } else if num_points > 1 {
+        // Multiple points: space them between (but not including) the boundaries
+        for i in 1..=num_points {
+            let x = x_min + (x_max - x_min) * i as f64 / (num_points + 1) as f64;
+            let y = self.evaluate(x);
+            points.push([x, y]);
+        }
+    }
+    
+    points.push([x_max, 0.0]);  // Bottom-right corner
+#+END_SRC
+
+*Lines 147-153*: Single point case
+- *Edge case*: When only one curve point requested
+- *Strategy*: Place single point at center of range
+- Ensures meaningful representation even with minimal points
+
+*Lines 154-160*: Multiple points case
+- *Improved spacing*: Points are spaced /between/ boundaries, not /at/ boundaries
+- *Formula change*: Divides by ~(num_points + 1)~ instead of ~(num_points - 1)~
+- *Range*: ~i~ goes from 1 to ~num_points~ inclusive
+- *Effect*: Avoids duplicate x-coordinates with boundary points
+
+*Line 162*: ~points.push([x_max, 0.0]);~
+- *Bottom-right corner*: Complete the polygon
+- Now we have: bottom-left → curve points → bottom-right
+- Rendering system will automatically close back to first point
+
+** Debug Point Generation
+
+#+BEGIN_SRC rust
+// Debug method to generate points as Vec instead of PlotPoints so we can inspect them
+fn generate_debug_points(&self, x_min: f64, x_max: f64, num_points: usize) -> Vec<[f64; 2]> {
+    let mut points = Vec::with_capacity(num_points + 2);
+    
+    points.push([x_min, 0.0]);  // Bottom-left corner
+    
+    // Match the logic in generate_shading_polygon
+    if num_points == 1 {
+        let x = (x_min + x_max) / 2.0;
+        let y = self.evaluate(x);
+        points.push([x, y]);
+    } else if num_points > 1 {
+        for i in 1..=num_points {
+            let x = x_min + (x_max - x_min) * i as f64 / (num_points + 1) as f64;
+            let y = self.evaluate(x);
+            points.push([x, y]);
+        }
+    }
+    
+    points.push([x_max, 0.0]);  // Bottom-right corner
+    points
+}
+#+END_SRC
+
+*Lines 168-188*: Debug version of polygon generation
+- *Purpose*: Testing and debugging - returns raw Vec instead of PlotPoints
+- *Identical logic*: Same algorithm as ~generate_shading_polygon~
+- *Key difference*: Returns ~Vec<[f64; 2]>~ instead of ~PlotPoints~
+- *Why needed*: PlotPoints is opaque - we can't inspect its contents in tests
+- *Return type*: ~Vec<[f64; 2]>~ - vector of 2-element arrays (x, y coordinates)
+
+** Standard Deviation Markers
+
+#+BEGIN_SRC rust
+fn get_std_markers(&self) -> Vec<f64> {
+    vec![
+        self.mean - 3.0 * self.std_dev,
+        self.mean - 2.0 * self.std_dev,
+        self.mean - self.std_dev,
+        self.mean,
+        self.mean + self.std_dev,
+        self.mean + 2.0 * self.std_dev,
+        self.mean + 3.0 * self.std_dev,
+    ]
+}
+#+END_SRC
+
+*Line 191*: ~fn get_std_markers(&self) -> Vec<f64> {~
+- *Purpose*: Calculate x-positions for vertical marker lines
+- *Statistical significance*: -3σ, -2σ, -1σ, μ, +1σ, +2σ, +3σ
+
+*Lines 192-200*: Marker calculations
+- *Mathematical meaning*: 
+  - ±1σ: ~68% of data falls within this range
+  - ±2σ: ~95% of data falls within this range  
+  - ±3σ: ~99.7% of data falls within this range
+- *Visual purpose*: Help users understand the distribution's spread
+- *Return*: Vector of x-coordinates where vertical lines should be drawn
+
+* Application Logic Implementation
+
+** Product Distribution Updates
+
+#+BEGIN_SRC rust
+impl PdfViewerApp {
+    fn update_product_distributions(&mut self) {
+        let mut updates = Vec::new();
+        
+        for (id, dist) in self.distributions.iter() {
+            if dist.is_product && !dist.parent_ids.is_empty() {
+                let parent_refs: Vec<&GaussianDistribution> = dist.parent_ids
+                    .iter()
+                    .filter_map(|parent_id| self.distributions.get(parent_id))
+                    .collect();
+                
+                if parent_refs.len() == dist.parent_ids.len() {
+                    let (new_mean, new_variance) = GaussianDistribution::multiply_gaussians(&parent_refs);
+                    updates.push((*id, new_mean, new_variance.sqrt()));
+                }
+            }
+        }
+        
+        for (id, mean, std_dev) in updates {
+            if let Some(dist) = self.distributions.get_mut(&id) {
+                dist.mean = mean;
+                dist.std_dev = std_dev;
+            }
+        }
+    }
+#+END_SRC
+
+*Line 204*: ~impl PdfViewerApp {~
+- Implementation block for main application methods
+
+*Line 205*: ~fn update_product_distributions(&mut self) {~
+- *Purpose*: Recalculate product distributions when parent parameters change
+- *Mutable reference*: ~&mut self~ allows modifying the app state
+
+*Line 206*: ~let mut updates = Vec::new();~
+- *Update queue*: Collect changes before applying them
+- *Why separate?*: Can't modify HashMap while iterating over it (borrowing rules)
+
+*Lines 208-219*: Find product distributions needing updates
+- *Line 208*: Iterate over all distributions
+- *Line 209*: Check if it's a product with parents
+- *Lines 210-213*: Collect references to parent distributions
+  - ~filter_map~: Try to get each parent, keep only successful lookups
+  - Handles case where parent might have been deleted
+- *Line 215*: Verify all parents still exist
+- *Line 216*: Calculate new parameters
+- *Line 217*: Queue the update (ID, new_mean, new_std_dev)
+
+*Lines 221-226*: Apply updates
+- *Separate loop*: Now safe to modify distributions
+- *Line 222*: ~if let Some(dist) = ...~ - safe pattern matching
+- Only updates if distribution still exists
+- *Lines 223-224*: Apply the calculated changes
+
+** Plot Range Calculation
+
+#+BEGIN_SRC rust
+fn get_plot_range(&self) -> (f64, f64) {
+    if let Some(bounds) = &self.plot_bounds {
+        (bounds.min()[0], bounds.max()[0])
+    } else {
+        (-6.0, 6.0)
+    }
+}
+#+END_SRC
+
+*Line 230*: ~fn get_plot_range(&self) -> (f64, f64) {~
+- *Purpose*: Determine current x-axis range for plotting
+- *Returns*: Tuple of (x_min, x_max)
+
+*Line 231*: ~if let Some(bounds) = &self.plot_bounds {~
+- *Pattern matching*: Check if custom bounds are set
+- *Borrowing*: ~&self.plot_bounds~ borrows the Option
+- *Destructuring*: If Some, extract the bounds value
+
+*Line 232*: ~(bounds.min()[0], bounds.max()[0])~
+- *Extract x-range*: bounds contains both x and y ranges
+- ~[0]~ gets the x-coordinate from the min/max points
+- Returns the custom zoom/pan range
+
+*Line 234*: ~(-6.0, 6.0)~
+- *Default range*: ±6 standard deviations
+- *Mathematical rationale*: Captures >99.9% of normal distribution
+- Used when no custom zoom/pan has been applied
+
+** Session Management
+
+#+BEGIN_SRC rust
+fn save_session(&self) -> Result<String, String> {
+    let session_data = SessionData {
+        distributions: self.distributions.clone(),
+        next_id: self.next_id,
+        show_shading: self.show_shading,
+        shading_opacity: self.shading_opacity,
+        show_std_markers: self.show_std_markers,
+    };
+    
+    serde_json::to_string_pretty(&session_data)
+        .map_err(|e| format!("Failed to serialize session: {}", e))
+}
+#+END_SRC
+
+*Line 267*: ~fn save_session(&self) -> Result<String, String> {~
+- *Purpose*: Convert current app state to JSON string
+- *Return type*: ~Result<String, String>~ - either JSON or error message
+
+*Lines 268-274*: Create session data object
+- *Selective copying*: Only save persistent state
+- *Excludes*: UI state like ~selected_for_multiplication~, ~plot_bounds~
+- *Clone distributions*: Deep copy of the HashMap
+
+*Lines 276-277*: JSON serialization
+- *serde_json::to_string_pretty*: Converts to formatted JSON
+- *map_err*: Converts serialization error to our error format
+- *Error handling*: Transforms technical error into user-friendly message
+
+#+BEGIN_SRC rust
+fn load_session(&mut self, json_data: &str) -> Result<(), String> {
+    let session_data: SessionData = serde_json::from_str(json_data)
+        .map_err(|e| format!("Failed to parse session: {}", e))?;
+    
+    self.distributions = session_data.distributions;
+    self.next_id = session_data.next_id;
+    self.show_shading = session_data.show_shading;
+    self.shading_opacity = session_data.shading_opacity;
+    self.show_std_markers = session_data.show_std_markers;
+    self.selected_for_multiplication.clear();
+    
+    Ok(())
+}
+#+END_SRC
+
+*Line 280*: ~fn load_session(&mut self, json_data: &str) -> Result<(), String> {~
+- *Purpose*: Restore app state from JSON string
+- *Mutable*: Modifies the current app state
+- *Parameters*: ~&str~ - string slice (borrowed string)
+
+*Lines 281-282*: JSON deserialization
+- *serde_json::from_str*: Parse JSON into SessionData
+- *?*: Error propagation - if parsing fails, return the error immediately
+- *Type annotation*: ~: SessionData~ tells Rust what type to deserialize into
+
+*Lines 284-288*: Restore app state
+- *Direct assignment*: Replace current state with loaded values
+- *Field by field*: Ensures all persistent state is restored
+
+*Line 289*: ~self.selected_for_multiplication.clear();~
+- *Clear selection*: UI state shouldn't persist across sessions
+- *Fresh start*: User begins with no selections
+
+*Line 291*: ~Ok(())~
+- *Success return*: Indicates successful loading
+- *Unit value*: ~()~ represents "no meaningful return value"
+
+* User Interface Logic
+
+The application uses egui's immediate-mode GUI pattern, where the entire interface is rebuilt every frame. This section covers the UI implementation details:
+
+** Main Update Loop
+
+#+BEGIN_SRC rust
+impl eframe::App for PdfViewerApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+#+END_SRC
+
+*Line 295*: ~impl eframe::App for PdfViewerApp {~
+- *Trait implementation*: Makes our app compatible with eframe
+- *eframe::App*: Interface that eframe expects for applications
+
+*Line 296*: ~fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {~
+- *Core UI method*: Called every frame to build the interface
+- *ctx*: egui context - provides access to all UI functions
+- *_frame*: Frame information (unused, hence ~_~ prefix)
+
+*Line 297*: ~egui::CentralPanel::default().show(ctx, |ui| {~
+- *Central panel*: Main area of the window (excludes menu bars, side panels)
+- *show()*: Displays the panel and runs the closure to build its contents
+- *Closure*: ~|ui|~ - anonymous function that receives a UI builder object
+
+** Header Section and Session Management
+
+The header contains the application title and session management buttons:
+
+#+BEGIN_SRC rust
+ui.horizontal(|ui| {
+    ui.label("PDF Viewer - Probability Density Function Explorer");
+    
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui.button("💾 Save Session").clicked() {
+            match self.save_session() {
+                Ok(json) => {
+                    ui.output_mut(|o| o.copied_text = json);
+                    println!("Session saved to clipboard!");
+                }
+                Err(e) => {
+                    eprintln!("Failed to save session: {}", e);
+                }
+            }
+        }
+        
+        if ui.button("📁 Load Session").clicked() {
+            // Simple implementation - user needs to paste JSON manually
+            println!("To load a session, paste the JSON data and restart the application");
+        }
+    });
+});
+#+END_SRC
+
+** Control Panel Layout
+
+The left side contains all the distribution controls in a fixed-width vertical layout:
+
+#+BEGIN_SRC rust
+ui.horizontal(|ui| {
+    // Left panel for controls
+    ui.vertical(|ui| {
+        ui.set_width(300.0);
+        ui.heading("Distribution Controls");
+        
+        if ui.button("Add New Gaussian").clicked() {
+            let dist = GaussianDistribution::new(
+                self.next_id,
+                format!("Gaussian {}", self.next_id + 1),
+                0.0,
+                1.0,
+            );
+            self.distributions.insert(self.next_id, dist);
+            self.next_id += 1;
+        }
+#+END_SRC
+
+** Visual Options and PDF Multiplication
+
+The controls include visual options and PDF multiplication functionality:
+
+#+BEGIN_SRC rust
+// Visual controls
+ui.heading("Visual Options");
+ui.checkbox(&mut self.show_shading, "Show shading under curves");
+if self.show_shading {
+    ui.horizontal(|ui| {
+        ui.label("Opacity:");
+        ui.add(egui::Slider::new(&mut self.shading_opacity, 0.0..=1.0)
+            .fixed_decimals(2));
+    });
+}
+ui.checkbox(&mut self.show_std_markers, "Show standard deviation markers");
+
+// Multiplication controls
+ui.heading("Multiply PDFs");
+ui.horizontal(|ui| {
+    if ui.button("Multiply Selected").clicked() {
+        if self.selected_for_multiplication.len() >= 2 {
+            let parent_refs: Vec<&GaussianDistribution> = self.selected_for_multiplication
+                .iter()
+                .filter_map(|id| self.distributions.get(id))
+                .collect();
+            
+            if parent_refs.len() >= 2 {
+                let product_name = format!("Product {}", self.next_id + 1);
+                let product = GaussianDistribution::new_product(
+                    self.next_id,
+                    product_name,
+                    self.selected_for_multiplication.clone(),
+                    &parent_refs,
+                );
+                
+                self.distributions.insert(self.next_id, product);
+                self.next_id += 1;
+                self.selected_for_multiplication.clear();
+            }
+        }
+    }
+    
+    if ui.button("Clear Selection").clicked() {
+        self.selected_for_multiplication.clear();
+    }
+});
+#+END_SRC
+
+** Plot Implementation
+
+The right side contains the plotting area with interactive controls:
+
+#+BEGIN_SRC rust
+// Right panel for plot
+ui.vertical(|ui| {
+    ui.heading("Probability Density Functions");
+    
+    // Plot controls
+    ui.horizontal(|ui| {
+        if ui.button("Reset View").clicked() {
+            self.plot_bounds = None;
+        }
+        if ui.button("Auto-fit").clicked() {
+            self.auto_fit_view();
+        }
+        ui.label("| Mouse: drag to pan, scroll to zoom");
+    });
+    
+    let plot = Plot::new("pdf_plot")
+        .view_aspect(2.0)
+        .allow_zoom(true)
+        .allow_drag(true)
+        .allow_scroll(true)
+        .show_axes([true, true]);
+        
+    plot.show(ui, |plot_ui| {
+        let colors = [
+            egui::Color32::BLUE,
+            egui::Color32::RED,
+            egui::Color32::GREEN,
+            egui::Color32::from_rgb(255, 165, 0), // Orange
+            egui::Color32::from_rgb(128, 0, 128), // Purple
+            egui::Color32::from_rgb(255, 192, 203), // Pink
+        ];
+        
+        for (idx, dist) in self.distributions.values().enumerate() {
+            let (x_min, x_max) = self.get_plot_range();
+            let color = colors[idx % colors.len()];
+            
+            // Draw shading if enabled  
+            if self.show_shading {
+                let points = dist.generate_points(x_min, x_max, 300);
+                
+                let alpha = ((255.0 * self.shading_opacity) as u8).max(1);
+                let fill_color = egui::Color32::from_rgba_unmultiplied(
+                    color.r(),
+                    color.g(), 
+                    color.b(),
+                    alpha
+                );
+                
+                let line_with_fill = Line::new(points)
+                    .name(&format!("{} (shading)", dist.name))
+                    .color(fill_color)
+                    .stroke(egui::Stroke::new(0.0, egui::Color32::TRANSPARENT))
+                    .fill(0.0);
+                plot_ui.line(line_with_fill);
+            }
+            
+            // Draw the curve line
+            let points = dist.generate_points(x_min, x_max, 300);
+            let line = Line::new(points)
+                .name(&dist.name)
+                .color(color);
+            plot_ui.line(line);
+            
+            // Draw standard deviation markers if enabled
+            if self.show_std_markers {
+                let markers = dist.get_std_markers();
+                for (i, &marker_x) in markers.iter().enumerate() {
+                    if marker_x >= x_min && marker_x <= x_max {
+                        let marker_style = if i == 3 { // Mean marker
+                            egui::Stroke::new(2.0, color)
+                        } else {
+                            egui::Stroke::new(1.0, color.gamma_multiply(0.7))
+                        };
+                        
+                        let vline = VLine::new(marker_x)
+                            .style(egui_plot::LineStyle::Dashed { length: 5.0 })
+                            .stroke(marker_style);
+                        plot_ui.vline(vline);
+                    }
+                }
+            }
+        }
+    });
+});
+#+END_SRC
+
+* Test Suite
+
+The test suite contains 1337 lines of comprehensive testing code covering mathematical accuracy, edge cases, and application functionality.
+
+** Test Organization
+
+#+BEGIN_SRC rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+    use std::f64::consts::PI;
+
+    const EPSILON: f64 = 1e-10;
+    const APPROX_EPSILON: f64 = 1e-6;
+#+END_SRC
+
+*Lines 567-574*: Test module setup
+- *Conditional compilation*: ~#[cfg(test)]~ only includes in test builds
+- *Import parent scope*: ~use super::*~ brings in all our application code
+- *Floating point comparison*: ~approx~ crate for comparing floating point numbers
+- *Constants*: Different epsilon values for strict vs. approximate comparisons
+
+** Mathematical Verification Tests
+
+The test suite includes comprehensive verification of mathematical properties:
+
+1. *Gaussian Distribution Creation* (lines 576-585)
+   - Verifies constructor sets all fields correctly
+   - Tests default values and type properties
+
+2. *PDF Evaluation Tests* (lines 587-616)
+   - Validates mathematical correctness against known formulas
+   - Tests standard normal distribution (μ=0, σ=1)
+   - Verifies symmetry properties
+   - Tests custom parameters (μ=2, σ=0.5)
+
+3. *Gaussian Multiplication Mathematics* (lines 618-661)
+   - Tests precision-weighted mean calculation
+   - Verifies variance combination formulas
+   - Tests edge cases (empty input, single distribution)
+   - Validates multi-distribution products
+
+4. *Point Generation Tests* (lines 691-768)
+   - Verifies curve smoothness and continuity
+   - Tests shading polygon generation
+   - Validates boundary conditions
+   - Ensures proper point ordering
+
+** Application State Tests
+
+1. *Session Management* (lines 803-873)
+   - Round-trip save/load testing
+   - JSON serialization verification
+   - Product distribution persistence
+   - Error handling for invalid JSON
+
+2. *Product Distribution Updates* (lines 875-914)
+   - Real-time recalculation when parents change
+   - Dependency tracking validation
+   - Mathematical consistency checks
+
+3. *Auto-fit View Calculation* (lines 975-1000)
+   - Boundary calculation verification
+   - Empty distribution handling
+   - Multi-distribution range optimization
+
+** Edge Case and Robustness Tests
+
+1. *Extreme Parameter Testing* (lines 925-962)
+   - Very small standard deviations (narrow distributions)
+   - Very large standard deviations (wide distributions)
+   - Numerical integration verification
+   - Symmetry preservation
+
+2. *Shading Polygon Validation* (lines 1040-1336)
+   - Different distribution parameters
+   - Edge cases (minimal points, large ranges)
+   - Area approximation accuracy
+   - Product distribution compatibility
+   - Boundary point duplication prevention
+
+** Key Testing Insights
+
+*Mathematical Accuracy*: Tests verify that the mathematical formulas are implemented correctly, including:
+- Normal distribution PDF calculations
+- Gaussian multiplication formulas (precision-weighted means)
+- Statistical marker positions (±1σ, ±2σ, ±3σ)
+
+*Numerical Stability*: Tests ensure the application handles edge cases:
+- Very narrow distributions (σ=0.01)
+- Very wide distributions (σ=10.0)
+- Empty datasets
+- Single-point polygons
+
+*User Interface Consistency*: Tests verify that:
+- Session save/load preserves all important state
+- Product distributions update when parents change
+- Visual elements (shading, markers) generate correctly
+
+*Performance Considerations*: The polygon generation tests specifically address:
+- Efficient point generation algorithms
+- Proper memory allocation (~Vec::with_capacity~)
+- Boundary condition handling to prevent visual artifacts
+
+* Summary
+
+This PDF viewer application demonstrates several advanced Rust and mathematical concepts:
+
+1. *Mathematical Modeling*: Implements Gaussian distribution mathematics with precision-weighted multiplication
+2. *Real-time Visualization*: Uses egui for immediate-mode GUI with plotting capabilities
+3. *State Management*: Complex application state with dependency tracking between distributions
+4. *Session Persistence*: JSON serialization for save/load functionality
+5. *Interactive UI*: Real-time parameter adjustment with immediate visual feedback
+6. *Comprehensive Testing*: Extensive test suite covering mathematical accuracy and edge cases
+
+The code follows Rust best practices including:
+- *Memory Safety*: No manual memory management, borrowing system prevents data races
+- *Error Handling*: Proper ~Result~ types for fallible operations
+- *Type Safety*: Strong typing prevents many classes of bugs
+- *Performance*: Efficient data structures and algorithms for real-time updates
+
+This application serves as an excellent example of scientific computing in Rust, combining mathematical rigor with user-friendly interactive visualization.
